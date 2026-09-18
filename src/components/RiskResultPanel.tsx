@@ -57,7 +57,7 @@ export function RiskResultPanel({ result, onAnalyzeAnother, label }: RiskResultP
 
   const handleShare = async () => {
     const summary = [
-      `PaySafe — Risk Report`,
+      `Financial Scam Guardian — Risk Report`,
       `Risk Score: ${result.riskScore}/100 (${result.riskLevel})`,
       `Threat: ${result.threatType}`,
       `Confidence: ${result.confidence}%`,

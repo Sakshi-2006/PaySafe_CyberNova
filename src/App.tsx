@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { ToastProvider } from '@/context/ToastContext';
-import { ThemeProvider } from '@/context/ThemeContext';
 import { AppShell } from '@/components/AppShell';
 import { LandingPage } from '@/pages/LandingPage';
 import { AuthPage } from '@/pages/AuthPage';
@@ -17,6 +16,9 @@ import { RiskHistoryPage } from '@/pages/RiskHistoryPage';
 import { IntelligencePage } from '@/pages/IntelligencePage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import type { ReactNode } from 'react';
+import { useEffect } from 'react';
+import { getSettings } from '@/lib/storage';
+import { applyTheme } from '@/lib/theme';
 
 function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user } = useAuth();
@@ -54,15 +56,17 @@ function AppRoutes() {
 }
 
 function App() {
+  useEffect(() => {
+    applyTheme(getSettings().darkMode);
+  }, []);
+
   return (
     <AuthProvider>
-      <ThemeProvider>
-        <ToastProvider>
-          <BrowserRouter>
-            <AppRoutes />
-          </BrowserRouter>
-        </ToastProvider>
-      </ThemeProvider>
+      <ToastProvider>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </ToastProvider>
     </AuthProvider>
   );
 }

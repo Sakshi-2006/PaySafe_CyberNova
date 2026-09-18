@@ -43,6 +43,7 @@ export function AppShell() {
         </div>
         <div className="min-w-0">
           <h1 className="font-heading font-bold text-white text-sm leading-tight">PaySafe</h1>
+          <p className="text-[11px] text-gray-500 leading-tight">AI Financial Security</p>
         </div>
       </div>
 
@@ -54,9 +55,7 @@ export function AppShell() {
               key={item.to}
               to={item.to}
               onClick={() => setMobileOpen(false)}
-              className={({ isActive }) =>
-                `nav-link ${isActive ? 'nav-link-active' : ''}`
-              }
+              className={({ isActive }) => `nav-link ${isActive ? 'nav-link-active' : ''}`}
             >
               <Icon className="w-5 h-5 shrink-0" />
               <span className="text-sm">{item.label}</span>
@@ -87,12 +86,10 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen flex">
-      {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-64 shrink-0 bg-ink-900/80 backdrop-blur-xl border-r border-cyan/10 fixed h-screen z-40">
         <SidebarContent />
       </aside>
 
-      {/* Mobile sidebar */}
       <AnimatePresence>
         {mobileOpen && (
           <>
@@ -111,8 +108,10 @@ export function AppShell() {
               className="fixed left-0 top-0 h-screen w-64 bg-ink-900 border-r border-cyan/10 z-50 lg:hidden"
             >
               <button
+                type="button"
                 onClick={() => setMobileOpen(false)}
                 className="absolute top-4 right-4 text-gray-400 hover:text-white"
+                aria-label="Close navigation"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -122,11 +121,9 @@ export function AppShell() {
         )}
       </AnimatePresence>
 
-      {/* Main content */}
       <div className="flex-1 lg:ml-64 min-w-0">
-        {/* Mobile header */}
         <header className="lg:hidden sticky top-0 z-30 bg-ink-950/90 backdrop-blur-xl border-b border-cyan/10 px-4 py-3 flex items-center justify-between">
-          <button onClick={() => setMobileOpen(true)} className="text-gray-400 hover:text-white">
+          <button type="button" onClick={() => setMobileOpen(true)} className="text-gray-400 hover:text-white" aria-label="Open navigation">
             <Menu className="w-6 h-6" />
           </button>
           <div className="flex items-center gap-2">
@@ -136,7 +133,6 @@ export function AppShell() {
           <div className="w-6" />
         </header>
 
-        {/* Breadcrumb (desktop) */}
         <div className="hidden lg:flex items-center gap-2 px-8 pt-6 text-sm text-gray-500">
           <span className="font-mono">PaySafe</span>
           <ChevronRight className="w-4 h-4" />

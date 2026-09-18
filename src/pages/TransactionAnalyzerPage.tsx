@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { CreditCard, Sparkles, FileText, Calculator } from 'lucide-react';
 import { AnalysisPipeline } from '@/components/AnalysisPipeline';
 import { RiskResultPanel } from '@/components/RiskResultPanel';
-import { analyzeTransaction, type RiskResult, type TransactionInput } from '@/lib/riskEngine';
+import { type RiskResult, type TransactionInput } from '@/lib/riskEngine';
+import { analyzeTransactionWithModel } from '@/lib/fraudApi';
 import { DEMO_TRANSACTION } from '@/lib/storage';
 import { useToast } from '@/context/ToastContext';
 
@@ -46,11 +47,16 @@ export function TransactionAnalyzerPage() {
     setPhase('analyzing');
   };
 
-  const handleComplete = () => {
-    const res = analyzeTransaction(tx);
-    setResult(res);
-    setPhase('result');
-    toast('Transaction analysis complete');
+  const handleComplete = async () => {
+    try {
+      const res = await analyzeTransactionWithModel(tx);
+      setResult(res);
+      setPhase('result');
+      toast('Transaction analysis complete');
+    } catch (error) {
+      setPhase('input');
+      toast(error instanceof Error ? error.message : 'Could not reach the fraud detection model', 'warning');
+    }
   };
 
   const handleReset = () => {

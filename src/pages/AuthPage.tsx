@@ -54,22 +54,15 @@ export function AuthPage() {
             </div>
           </Link>
           <h1 className="text-2xl font-heading font-bold text-white">PaySafe</h1>
-          <p className="text-sm text-gray-500 mt-1">Your AI-powered financial security platform</p>
+          <p className="text-sm text-gray-500 mt-1">AI-powered financial security platform</p>
         </div>
 
         <div className="glass-panel p-8">
-          {/* Tabs */}
           <div className="flex gap-1 p-1 rounded-xl bg-ink-900/60 border border-ink-600 mb-6">
-            <button
-              onClick={() => { setTab('login'); setErrors({}); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-body font-semibold transition-all ${tab === 'login' ? 'bg-cyan/15 text-cyan-glow border border-cyan/30' : 'text-gray-400 hover:text-white'}`}
-            >
+            <button type="button" onClick={() => { setTab('login'); setErrors({}); }} className={`flex-1 py-2.5 rounded-lg text-sm font-body font-semibold transition-all ${tab === 'login' ? 'bg-cyan/15 text-cyan-glow border border-cyan/30' : 'text-gray-400 hover:text-white'}`}>
               Log In
             </button>
-            <button
-              onClick={() => { setTab('signup'); setErrors({}); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-body font-semibold transition-all ${tab === 'signup' ? 'bg-cyan/15 text-cyan-glow border border-cyan/30' : 'text-gray-400 hover:text-white'}`}
-            >
+            <button type="button" onClick={() => { setTab('signup'); setErrors({}); }} className={`flex-1 py-2.5 rounded-lg text-sm font-body font-semibold transition-all ${tab === 'signup' ? 'bg-cyan/15 text-cyan-glow border border-cyan/30' : 'text-gray-400 hover:text-white'}`}>
               Sign Up
             </button>
           </div>
@@ -80,13 +73,7 @@ export function AuthPage() {
                 <label className="block text-xs font-mono uppercase tracking-wider text-gray-500 mb-1.5">Name</label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your name"
-                    className="input-field pl-10"
-                  />
+                  <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" className="input-field pl-10" />
                 </div>
                 {errors.name && <p className="text-xs text-critical mt-1">{errors.name}</p>}
               </div>
@@ -96,13 +83,7 @@ export function AuthPage() {
               <label className="block text-xs font-mono uppercase tracking-wider text-gray-500 mb-1.5">Email</label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="input-field pl-10"
-                />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="input-field pl-10" />
               </div>
               {errors.email && <p className="text-xs text-critical mt-1">{errors.email}</p>}
             </div>
@@ -111,13 +92,7 @@ export function AuthPage() {
               <label className="block text-xs font-mono uppercase tracking-wider text-gray-500 mb-1.5">Password</label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="input-field pl-10"
-                />
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="input-field pl-10" />
               </div>
               {errors.password && <p className="text-xs text-critical mt-1">{errors.password}</p>}
             </div>
@@ -126,8 +101,6 @@ export function AuthPage() {
               {tab === 'login' ? 'Log In' : 'Create Account'} <ArrowRight className="w-4 h-4" />
             </button>
           </form>
-
-
         </div>
 
         <p className="text-center text-xs text-gray-500 mt-6">
