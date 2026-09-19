@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import jsQR from 'jsqr';
 import { motion, AnimatePresence } from 'framer-motion';
 import { QrCode, Sparkles, Upload, Camera, ScanLine, UserCheck, ShieldCheck } from 'lucide-react';
 import { AnalysisPipeline } from '@/components/AnalysisPipeline';
@@ -45,22 +46,24 @@ export function QrAnalyzerPage() {
   const [scanning, setScanning] = useState(false);
 
   const decodeBitmap = async (source: ImageBitmapSource) => {
-    if (!('BarcodeDetector' in window)) {
-      throw new Error('This browser does not support native QR decoding. Use a recent Chrome/Edge browser.');
-    }
-    const Detector = (window as any).BarcodeDetector;
-    const detector = new Detector({ formats: ['qr_code'] });
-    const codes = await detector.detect(source);
-    if (!codes.length || !codes[0].rawValue) throw new Error('No QR code was detected in the image.');
-    const payload = codes[0].rawValue;
-    setRawPayload(payload);
-    setQrData(parseUpiPayload(payload));
+    const bitmap = await createImageBitmap(source as ImageBitmapSource);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new Error('Could not prepare the QR image for decoding.');
+    ctx.drawImage(bitmap, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+    bitmap.close();
+    if (!code?.data) throw new Error('No QR code was detected in the image.');
+    setRawPayload(code.data);
+    setQrData(parseUpiPayload(code.data));
   };
 
   const handleUpload = async (file: File) => {
     try {
-      const bitmap = await createImageBitmap(file);
-      await decodeBitmap(bitmap);
+      await decodeBitmap(file);
       toast('QR decoded successfully');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'QR decoding failed', 'error');
@@ -75,40 +78,75 @@ export function QrAnalyzerPage() {
 
   const handleCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Camera access is not available in this browser. Open PaySafe over HTTPS in Chrome or Edge.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
       streamRef.current = stream;
       setScanning(true);
-      requestAnimationFrame(async () => {
-        if (!videoRef.current) return;
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        if (!('BarcodeDetector' in window)) {
-          stopCamera();
-          throw new Error('This browser does not support native QR camera scanning. Use Chrome/Edge or upload an image.');
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
         }
-        const Detector = (window as any).BarcodeDetector;
-        const detector = new Detector({ formats: ['qr_code'] });
-        const scan = async () => {
-          if (!streamRef.current || !videoRef.current) return;
-          try {
-            const codes = await detector.detect(videoRef.current);
-            if (codes.length && codes[0].rawValue) {
-              setRawPayload(codes[0].rawValue);
-              setQrData(parseUpiPayload(codes[0].rawValue));
-              stopCamera();
-              toast('QR decoded successfully');
-              return;
-            }
-          } catch {}
-          requestAnimationFrame(scan);
-        };
-        scan();
       });
     } catch (error) {
       stopCamera();
-      toast(error instanceof Error ? error.message : 'Camera access failed', 'error');
+      const name = error instanceof DOMException ? error.name : '';
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        toast('Camera permission was blocked. Click the camera icon in the address bar, allow Camera for PaySafe, then try again.', 'error');
+      } else if (name === 'NotFoundError') {
+        toast('No camera was found on this device.', 'error');
+      } else if (name === 'NotReadableError') {
+        toast('The camera is already being used by another application.', 'error');
+      } else {
+        toast(error instanceof Error ? error.message : 'Camera access failed', 'error');
+      }
     }
   };
+
+  useEffect(() => {
+    if (!scanning) return;
+    let cancelled = false;
+    let animationId = 0;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    const scan = () => {
+      if (cancelled || !streamRef.current || !videoRef.current || !ctx) return;
+      const video = videoRef.current;
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+        if (code?.data) {
+          cancelled = true;
+          setRawPayload(code.data);
+          try {
+            setQrData(parseUpiPayload(code.data));
+            stopCamera();
+            toast('QR decoded successfully');
+          } catch (error) {
+            stopCamera();
+            toast(error instanceof Error ? error.message : 'Invalid UPI QR payload', 'error');
+          }
+          return;
+        }
+      }
+      animationId = requestAnimationFrame(scan);
+    };
+    animationId = requestAnimationFrame(scan);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(animationId);
+    };
+  }, [scanning, toast]);
+
 
   const handleAnalyze = () => {
     if (!qrData?.upiId) {
