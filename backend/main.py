@@ -130,17 +130,22 @@ def analyze_transaction(tx: TransactionRequest):
 
 
 # ── PaySafe backend authentication ─────────────────────────────
-# Authentication is handled by this FastAPI service. Passwords are bcrypt-hashed
-# and the signed JWT is stored in an HttpOnly cookie; no auth token is stored
-# in localStorage/sessionStorage by the frontend.
+# FastAPI handles authentication; MongoDB Atlas provides persistent user storage.
+# Passwords are bcrypt-hashed and the JWT is stored in an HttpOnly cookie.
+
+import uuid
 import jwt
-import psycopg
+from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
 from passlib.context import CryptContext
 from fastapi import Cookie, Response
 
 AUTH_SECRET = os.getenv("PAYSAFE_AUTH_SECRET", "CHANGE_ME_IN_PRODUCTION")
+MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_DB = os.getenv("MONGODB_DB", "PaySafe")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-DATABASE_URL = os.getenv("DATABASE_URL")
+
+_mongo_client = None
 
 class AuthCredentials(BaseModel):
     email: str = Field(min_length=3, max_length=254)
@@ -153,34 +158,107 @@ class ProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
 def _db():
-    if not DATABASE_URL:
+    global _mongo_client
+    if not MONGODB_URI:
         raise HTTPException(status_code=503, detail="Authentication database is not configured.")
-    return psycopg.connect(DATABASE_URL, connect_timeout=8)
-
-def _ensure_users_table():
-    with _db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("CREATE TABLE IF NOT EXISTS paysafe_users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
-        conn.commit()
+    if _mongo_client is None:
+        _mongo_client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=8000,
+            connectTimeoutMS=8000,
+            maxPoolSize=10,
+        )
+    db = _mongo_client[MONGODB_DB]
+    db.command("ping")
+    db["users"].create_index("email", unique=True)
+    return db
 
 def _public_user(user):
     return {"id": user["id"], "name": user["name"], "email": user["email"]}
 
 def _issue_auth_cookie(response: Response, user_id: str):
     token = jwt.encode({"sub": user_id}, AUTH_SECRET, algorithm="HS256")
-    response.set_cookie("paysafe_session", token, httponly=True, secure=True, samesite="none", max_age=60 * 60 * 24 * 7, path="/")
+    response.set_cookie(
+        "paysafe_session",
+        token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+    )
 
 def _current_user(session: str | None):
-    if not session: return None
+    if not session:
+        return None
     try:
         payload = jwt.decode(session, AUTH_SECRET, algorithms=["HS256"])
         user_id = payload.get("sub")
-        if not user_id: return None
-        with _db() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id, name, email FROM paysafe_users WHERE id=%s", (user_id,))
-                row = cur.fetchone()
-        return {"id": row[0], "name": row[1], "email": row[2]} if row else None
+        if not user_id:
+            return None
+        user = _db()["users"].find_one(
+            {"id": user_id},
+            {"_id": 0, "id": 1, "name": 1, "email": 1},
+        )
+        return user
     except Exception:
         return None
 
+@app.post("/api/auth/signup")
+def signup(request: SignupRequest, response: Response):
+    email = request.email.strip().lower()
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required.")
+    try:
+        user = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "email": email,
+            "password_hash": pwd_context.hash(request.password),
+            "created_at": datetime.now(timezone.utc),
+        }
+        _db()["users"].insert_one(user)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Authentication database error: {exc}") from exc
+    _issue_auth_cookie(response, user["id"])
+    return {"user": _public_user(user)}
+
+@app.post("/api/auth/login")
+def login(request: AuthCredentials, response: Response):
+    email = request.email.strip().lower()
+    try:
+        user = _db()["users"].find_one({"email": email})
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Authentication database error: {exc}") from exc
+    if not user or not pwd_context.verify(request.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    _issue_auth_cookie(response, user["id"])
+    return {"user": _public_user(user)}
+
+@app.get("/api/auth/me")
+def me(paysafe_session: str | None = Cookie(default=None)):
+    user = _current_user(paysafe_session)
+    return {"user": _public_user(user) if user else None}
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie("paysafe_session", path="/", secure=True, samesite="none")
+    return {"ok": True}
+
+@app.patch("/api/auth/profile")
+def update_profile(request: ProfileRequest, response: Response, paysafe_session: str | None = Cookie(default=None)):
+    user = _current_user(paysafe_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required.")
+    try:
+        _db()["users"].update_one({"id": user["id"]}, {"$set": {"name": name}})
+        updated = _db()["users"].find_one({"id": user["id"]})
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Authentication database error: {exc}") from exc
+    return {"user": _public_user(updated)}
