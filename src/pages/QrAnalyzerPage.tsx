@@ -177,7 +177,22 @@ function parsePaymentPayload(raw: string): QRData {
   const emv = parseEmvPaymentQr(value);
   if (emv) return emv;
 
-  throw new Error('QR code detected, but its payment format could not be recognized.');
+  // Do not reject a successfully decoded QR just because its payment
+  // specification is not one of the formats PaySafe knows structurally.
+  // Keep the raw payload so the backend can still analyze it as an
+  // unknown payment QR instead of showing a false "not recognizable" error.
+  return {
+    network: 'EMV_PAYMENT_QR',
+    paymentAddress: value,
+    upiId: '',
+    recipientName: '',
+    amount: 0,
+    currency: '—',
+    note: '',
+    merchantCity: '',
+    country: '',
+    reference: 'Unknown payment QR',
+  };
 }
 
 async function decodeWithNativeDetector(source: ImageBitmapSource): Promise<string | null> {
