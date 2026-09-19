@@ -42,30 +42,12 @@ export interface RiskHistoryEntry {
 }
 
 const KEYS = {
-  auth: 'fsg_auth',
   analyses: 'fsg_analyses',
   alerts: 'fsg_alerts',
   settings: 'fsg_settings',
   transactions: 'fsg_transactions',
   history: 'fsg_history',
 };
-
-export function getAuth(): { name: string; email: string } | null {
-  try {
-    const raw = localStorage.getItem(KEYS.auth);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function setAuth(user: { name: string; email: string }): void {
-  localStorage.setItem(KEYS.auth, JSON.stringify(user));
-}
-
-export function clearAuth(): void {
-  localStorage.removeItem(KEYS.auth);
-}
 
 export function getSavedAnalyses(): SavedAnalysis[] {
   try {
