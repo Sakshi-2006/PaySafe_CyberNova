@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 import { CheckCircle2, Info, AlertTriangle, X } from 'lucide-react';
 
-type ToastType = 'success' | 'info' | 'warning';
+type ToastType = 'success' | 'info' | 'warning' | 'error';
 
 interface Toast {
   id: string;
@@ -25,12 +25,14 @@ const icons = {
   success: CheckCircle2,
   info: Info,
   warning: AlertTriangle,
+  error: AlertTriangle,
 };
 
 const colors = {
   success: 'text-safe border-safe/30',
   info: 'text-cyan-glow border-cyan/30',
   warning: 'text-caution border-caution/30',
+  error: 'text-critical border-critical/30',
 };
 
 export function ToastProvider({ children }: { children: ReactNode }) {
