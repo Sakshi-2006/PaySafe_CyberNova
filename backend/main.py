@@ -120,6 +120,106 @@ def analyze_transaction(tx: TransactionRequest):
         raise HTTPException(status_code=500, detail=f"Model analysis failed: {exc}") from exc
 
 
+# ── PaySafe backend authentication ─────────────────────────────
+# Authentication is handled by this FastAPI service. Passwords are bcrypt-hashed
+# and the signed JWT is stored in an HttpOnly cookie; no auth token is stored
+# in localStorage/sessionStorage by the frontend.
+import jwt
+from passlib.context import CryptContext
+from fastapi import Cookie, Response
+
+AUTH_SECRET = os.getenv("PAYSAFE_AUTH_SECRET", "CHANGE_ME_IN_PRODUCTION")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+USERS_FILE = BASE / "users.json"
+
+class AuthCredentials(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=6, max_length=128)
+
+class SignupRequest(AuthCredentials):
+    name: str = Field(min_length=1, max_length=100)
+
+class ProfileRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+def _read_users():
+    if not USERS_FILE.exists():
+        return {}
+    try:
+        return json.loads(USERS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def _write_users(users):
+    USERS_FILE.write_text(json.dumps(users, indent=2), encoding="utf-8")
+
+def _public_user(user):
+    return {"id": user["id"], "name": user["name"], "email": user["email"]}
+
+def _issue_auth_cookie(response: Response, user_id: str):
+    token = jwt.encode({"sub": user_id}, AUTH_SECRET, algorithm="HS256")
+    response.set_cookie(
+        "paysafe_session", token, httponly=True, secure=True,
+        samesite="none", max_age=60 * 60 * 24 * 7, path="/"
+    )
+
+def _current_user(session: str | None):
+    if not session:
+        return None
+    try:
+        payload = jwt.decode(session, AUTH_SECRET, algorithms=["HS256"])
+        return _read_users().get(payload.get("sub"))
+    except Exception:
+        return None
+
+@app.post("/api/auth/signup")
+def auth_signup(req: SignupRequest, response: Response):
+    email = req.email.strip().lower()
+    users = _read_users()
+    if email in users:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    user_id = __import__("uuid").uuid4().hex
+    users[user_id] = {
+        "id": user_id,
+        "name": req.name.strip(),
+        "email": email,
+        "passwordHash": pwd_context.hash(req.password),
+    }
+    _write_users(users)
+    _issue_auth_cookie(response, user_id)
+    return {"user": _public_user(users[user_id])}
+
+@app.post("/api/auth/login")
+def auth_login(req: AuthCredentials, response: Response):
+    email = req.email.strip().lower()
+    users = _read_users()
+    user = next((u for u in users.values() if u["email"] == email), None)
+    if not user or not pwd_context.verify(req.password, user["passwordHash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    _issue_auth_cookie(response, user["id"])
+    return {"user": _public_user(user)}
+
+@app.get("/api/auth/me")
+def auth_me(paysafe_session: str | None = Cookie(default=None)):
+    user = _current_user(paysafe_session)
+    return {"user": _public_user(user) if user else None}
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie("paysafe_session", path="/")
+    return {"ok": True}
+
+@app.patch("/api/auth/profile")
+def auth_profile(req: ProfileRequest, response: Response, paysafe_session: str | None = Cookie(default=None)):
+    user = _current_user(paysafe_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    users = _read_users()
+    user["name"] = req.name.strip()
+    users[user["id"]] = user
+    _write_users(users)
+    return {"user": _public_user(user)}
+
 # ── Live link reputation + UPI verification services ─────────────
 # These endpoints deliberately do not fabricate reputation/UPI ownership.
 # Domain registration data is fetched from RDAP.org. Optional Google Safe
