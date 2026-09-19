@@ -53,18 +53,22 @@ export function SettingsPage() {
   const [settings, setSettingsState] = useState<AppSettings>(getSettings);
   const [name, setName] = useState(user?.name ?? '');
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
       toast('Name cannot be empty', 'warning');
       return;
     }
 
-    updateProfile(trimmedName);
-    setName(trimmedName);
-    setSettings(settings);
-    applyTheme(settings.darkMode);
-    toast('Settings saved successfully');
+    try {
+      await updateProfile(trimmedName);
+      setName(trimmedName);
+      setSettings(settings);
+      applyTheme(settings.darkMode);
+      toast('Settings saved successfully');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Could not update your profile', 'error');
+    }
   };
 
   const handleClearHistory = () => {
