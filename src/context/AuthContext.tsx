@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import type { User } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
 
-interface AuthUser {
+const API_BASE = (import.meta.env.VITE_FRAUD_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+
+export interface AuthUser {
+  id: string;
   name: string;
   email: string;
 }
@@ -17,11 +18,15 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function mapUser(user: User | null): AuthUser | null {
-  if (!user?.email) return null;
-  const metadataName = typeof user.user_metadata?.name === 'string' ? user.user_metadata.name.trim() : '';
-  const fallbackName = user.email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  return { name: metadataName || fallbackName, email: user.email };
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    credentials: 'include',
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.detail || 'Authentication request failed.');
+  return payload as T;
 }
 
 export function useAuth(): AuthContextValue {
@@ -34,51 +39,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (mounted) setUser(mapUser(data.session?.user ?? null));
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) setUser(mapUser(session?.user ?? null));
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    request<{ user: AuthUser | null }>('/api/auth/me')
+      .then(({ user }) => setUser(user))
+      .catch(() => setUser(null));
   }, []);
 
   const login = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-    if (error) throw error;
+    const data = await request<{ user: AuthUser }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim(), password }),
+    });
+    setUser(data.user);
   };
 
   const signup = async (name: string, email: string, password: string) => {
-    const { data, error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: { data: { name: name.trim() } },
+    const data = await request<{ user: AuthUser }>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ name: name.trim(), email: email.trim(), password }),
     });
-    if (error) throw error;
-    return { needsEmailConfirmation: !data.session };
+    setUser(data.user);
+    return { needsEmailConfirmation: false };
   };
 
   const updateProfile = async (name: string) => {
-    const trimmedName = name.trim();
-    if (!trimmedName) return;
-    const { error } = await supabase.auth.updateUser({ data: { name: trimmedName } });
-    if (error) throw error;
+    const data = await request<{ user: AuthUser }>('/api/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    setUser(data.user);
   };
 
   const logout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
+    await request('/api/auth/logout', { method: 'POST' });
+    setUser(null);
   };
 
-  return (
-    <AuthContext.Provider value={{ user, login, signup, updateProfile, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={{ user, login, signup, updateProfile, logout }}>{children}</AuthContext.Provider>;
 }
