@@ -21,6 +21,10 @@ metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8")) if METRICS_PATH.e
 REFERENCES = {"amount": 4836.5, "transaction_hour": 12.0, "previous_transactions": 7.0}
 
 app = FastAPI(title="PaySafe Fraud Detection API", version="1.0.0")
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "PaySafe Fraud Detection API", "health": "/health", "docs": "/docs"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
