@@ -23,8 +23,7 @@ export function LandingNav() {
             <Shield className="w-5 h-5 text-cyan-glow" />
           </div>
           <div className="leading-tight">
-            <span className="block font-heading font-bold text-white text-sm">Financial Scam</span>
-            <span className="block font-heading font-bold text-cyan-glow text-sm">Guardian</span>
+            <span className="block font-heading font-bold text-white text-sm">PaySafe</span>
           </div>
         </Link>
 
