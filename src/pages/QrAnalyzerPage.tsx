@@ -115,7 +115,7 @@ function parsePaymentPayload(raw: string): QRData {
 
   // Some merchant QR codes encode a payment web URL rather than the
   // EMV/UPI payload directly. Keep the decoded URL instead of rejecting it.
-  if (/^https?:\\/\\//i.test(value)) {
+  if (/^https?:\/\//i.test(value)) {
     let host = '';
     try { host = new URL(value).hostname; } catch {}
     return {
@@ -319,7 +319,7 @@ export function QrAnalyzerPage() {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-    const scan = () => {
+    const scan = async () => {
       if (cancelled || !streamRef.current || !videoRef.current || !ctx) return;
       const video = videoRef.current;
 
