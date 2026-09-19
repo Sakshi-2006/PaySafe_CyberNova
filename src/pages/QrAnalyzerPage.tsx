@@ -21,17 +21,106 @@ interface QRData { upiId: string; recipientName: string; amount: number; note: s
 
 function parseUpiPayload(raw: string): QRData {
   const value = raw.trim();
-  if (!value.toLowerCase().startsWith('upi://pay')) {
-    throw new Error('The QR does not contain a UPI payment payload.');
+
+  // UPI QR codes normally contain a UPI deep link such as upi://pay?... .
+  // Some PSPs may wrap/encode the same parameters in another URL scheme,
+  // so first try the raw value and then a query-string fallback.
+  let params: URLSearchParams | null = null;
+
+  try {
+    const url = new URL(value);
+    const protocol = url.protocol.toLowerCase();
+    const host = url.hostname.toLowerCase();
+
+    if ((protocol === 'upi:' && host === 'pay') || protocol === 'upi:') {
+      params = url.searchParams;
+    } else if (url.searchParams.has('pa')) {
+      params = url.searchParams;
+    }
+  } catch {
+    // Fall through to a plain query-string parser below.
   }
-  const url = new URL(value);
-  const params = url.searchParams;
+
+  if (!params) {
+    const queryStart = value.indexOf('?');
+    const query = queryStart >= 0 ? value.slice(queryStart + 1) : value;
+    const candidate = new URLSearchParams(query);
+    if (candidate.has('pa')) params = candidate;
+  }
+
+  const upiId = params?.get('pa')?.trim() || '';
+  if (!upiId || !upiId.includes('@')) {
+    throw new Error('QR code detected, but it does not contain a recognizable UPI payment address.');
+  }
+
   return {
-    upiId: params.get('pa') || '',
-    recipientName: params.get('pn') || '',
-    amount: Number(params.get('am') || 0),
-    note: params.get('tn') || '',
+    upiId,
+    recipientName: params?.get('pn')?.trim() || '',
+    amount: Number(params?.get('am') || 0),
+    note: params?.get('tn')?.trim() || '',
   };
+}
+
+function decodeImageData(imageData: ImageData): string | null {
+  const attempts: ImageData[] = [imageData];
+
+  // Try a high-contrast grayscale version as well. This helps with
+  // screenshots, photos, tinted QR stickers and compressed images.
+  const gray = new Uint8ClampedArray(imageData.data);
+  for (let i = 0; i < gray.length; i += 4) {
+    const luminance = Math.round(0.299 * gray[i] + 0.587 * gray[i + 1] + 0.114 * gray[i + 2]);
+    gray[i] = luminance;
+    gray[i + 1] = luminance;
+    gray[i + 2] = luminance;
+  }
+  attempts.push(new ImageData(gray, imageData.width, imageData.height));
+
+  for (const attempt of attempts) {
+    const code = jsQR(attempt.data, attempt.width, attempt.height, {
+      inversionAttempts: 'attemptBoth',
+    });
+    if (code?.data) return code.data;
+  }
+
+  return null;
+}
+
+async function decodeSource(source: ImageBitmapSource): Promise<string> {
+  const bitmap = await createImageBitmap(source);
+  try {
+    // Upscale smaller QR images so the QR modules have enough pixels for
+    // the decoder, while keeping large photos at a manageable size.
+    const scale = Math.max(1, Math.min(3, 1200 / Math.max(bitmap.width, bitmap.height)));
+    const width = Math.round(bitmap.width * scale);
+    const height = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) throw new Error('Could not prepare the QR image for decoding.');
+
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    const imageData = ctx.getImageData(0, 0, width, height);
+
+    // First scan the complete image.
+    let payload = decodeImageData(imageData);
+    if (payload) return payload;
+
+    // Then scan the central area. This helps when a QR is surrounded by
+    // posters/text/logos or when the photo has large margins.
+    const cropWidth = Math.round(width * 0.8);
+    const cropHeight = Math.round(height * 0.8);
+    const cropX = Math.round((width - cropWidth) / 2);
+    const cropY = Math.round((height - cropHeight) / 2);
+    const crop = ctx.getImageData(cropX, cropY, cropWidth, cropHeight);
+    payload = decodeImageData(crop);
+    if (payload) return payload;
+
+    throw new Error('No QR code was detected in the image. Make sure the entire QR is visible, sharp and not heavily cropped.');
+  } finally {
+    bitmap.close();
+  }
 }
 
 export function QrAnalyzerPage() {
@@ -45,26 +134,12 @@ export function QrAnalyzerPage() {
   const [result, setResult] = useState<RiskResult | null>(null);
   const [scanning, setScanning] = useState(false);
 
-  const decodeBitmap = async (source: ImageBitmapSource) => {
-    const bitmap = await createImageBitmap(source as ImageBitmapSource);
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) throw new Error('Could not prepare the QR image for decoding.');
-    ctx.drawImage(bitmap, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-    bitmap.close();
-    if (!code?.data) throw new Error('No QR code was detected in the image.');
-    setRawPayload(code.data);
-    setQrData(parseUpiPayload(code.data));
-  };
-
   const handleUpload = async (file: File) => {
     try {
-      await decodeBitmap(file);
-      toast('QR decoded successfully');
+      const payload = await decodeSource(file);
+      setRawPayload(payload);
+      setQrData(parseUpiPayload(payload));
+      toast('UPI QR decoded successfully');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'QR decoding failed', 'error');
     }
@@ -119,18 +194,22 @@ export function QrAnalyzerPage() {
       if (cancelled || !streamRef.current || !videoRef.current || !ctx) return;
       const video = videoRef.current;
       if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+        // Downscale very large camera frames for smoother real-time decoding.
+        const scale = Math.min(1, 1280 / video.videoWidth);
+        canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-        if (code?.data) {
+        const payload = decodeImageData(imageData);
+
+        if (payload) {
           cancelled = true;
-          setRawPayload(code.data);
+          setRawPayload(payload);
           try {
-            setQrData(parseUpiPayload(code.data));
+            setQrData(parseUpiPayload(payload));
             stopCamera();
-            toast('QR decoded successfully');
+            toast('UPI QR decoded successfully');
           } catch (error) {
             stopCamera();
             toast(error instanceof Error ? error.message : 'Invalid UPI QR payload', 'error');
@@ -140,13 +219,13 @@ export function QrAnalyzerPage() {
       }
       animationId = requestAnimationFrame(scan);
     };
+
     animationId = requestAnimationFrame(scan);
     return () => {
       cancelled = true;
       cancelAnimationFrame(animationId);
     };
   }, [scanning, toast]);
-
 
   const handleAnalyze = () => {
     if (!qrData?.upiId) {
