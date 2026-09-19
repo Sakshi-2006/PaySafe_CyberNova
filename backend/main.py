@@ -135,6 +135,7 @@ def analyze_transaction(tx: TransactionRequest):
 
 import uuid
 import jwt
+from urllib.parse import quote_plus, unquote_plus
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
 from fastapi import Cookie, Response
@@ -156,13 +157,26 @@ class SignupRequest(AuthCredentials):
 class ProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
+def _encoded_mongodb_uri(uri: str) -> str:
+    """Escape MongoDB URI credentials so special characters in Atlas passwords work."""
+    if "://" not in uri or "@" not in uri:
+        return uri
+    scheme, rest = uri.split("://", 1)
+    userinfo, host = rest.rsplit("@", 1)
+    if ":" not in userinfo:
+        return uri
+    username, password = userinfo.split(":", 1)
+    username = quote_plus(unquote_plus(username))
+    password = quote_plus(unquote_plus(password))
+    return f"{scheme}://{username}:{password}@{host}"
+
 def _db():
     global _mongo_client
     if not MONGODB_URI:
         raise HTTPException(status_code=503, detail="Authentication database is not configured.")
     if _mongo_client is None:
         _mongo_client = MongoClient(
-            MONGODB_URI,
+            _encoded_mongodb_uri(MONGODB_URI),
             serverSelectionTimeoutMS=8000,
             connectTimeoutMS=8000,
             maxPoolSize=10,
