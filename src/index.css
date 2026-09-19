@@ -107,3 +107,42 @@ html.light-theme header {
 html.light-theme ::-webkit-scrollbar-track { background: #e2e8f0; }
 html.light-theme ::-webkit-scrollbar-thumb { background: #94a3b8; }
 html.light-theme ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+
+/* Strong light-mode surface and contrast overrides */
+html.light-theme .glass,
+html.light-theme .glass-panel,
+html.light-theme .glass-card {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06) !important;
+  color: #0f172a !important;
+}
+html.light-theme .glass-card:hover {
+  border-color: rgba(8, 145, 178, 0.28) !important;
+}
+html.light-theme .bg-ink-950 { background-color: #f8fafc !important; }
+html.light-theme .bg-ink-900\/80,
+html.light-theme .bg-ink-900\/50,
+html.light-theme .bg-ink-850\/60,
+html.light-theme .bg-ink-850\/70,
+html.light-theme .bg-ink-800\/60,
+html.light-theme .bg-ink-700\/50 {
+  background-color: rgba(255,255,255,0.96) !important;
+}
+html.light-theme .text-cyan-glow { color: #0e7490 !important; }
+html.light-theme .text-gray-300 { color: #475569 !important; }
+html.light-theme .text-gray-400 { color: #475569 !important; }
+html.light-theme .text-gray-500 { color: #64748b !important; }
+html.light-theme .text-gray-600 { color: #475569 !important; }
+html.light-theme .text-gray-700 { color: #334155 !important; }
+html.light-theme .border-cyan\/10 { border-color: #e2e8f0 !important; }
+html.light-theme .border-cyan\/20 { border-color: #cbd5e1 !important; }
+html.light-theme .border-cyan\/30 { border-color: #94a3b8 !important; }
+html.light-theme .bg-cyan\/5 { background-color: #f0fdfa !important; }
+html.light-theme .bg-cyan\/10 { background-color: #ecfeff !important; }
+html.light-theme .bg-caution\/5 { background-color: #fffbeb !important; }
+html.light-theme .bg-caution\/10 { background-color: #fef3c7 !important; }
+html.light-theme .shadow-card { box-shadow: 0 8px 30px rgba(15, 23, 42, 0.06) !important; }
+html.light-theme .btn-secondary { color: #0e7490 !important; background-color: #ecfeff !important; border-color: #a5f3fc !important; }
+html.light-theme .btn-ghost { color: #475569 !important; }
