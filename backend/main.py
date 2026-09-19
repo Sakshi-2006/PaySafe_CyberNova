@@ -141,6 +141,82 @@ def analyze_transaction(tx: TransactionRequest):
         raise HTTPException(status_code=500, detail=f"Model analysis failed: {exc}") from exc
 
 
+# ── Payment QR verification ────────────────────────────────────
+@app.post("/api/verify-upi")
+def verify_payment_qr(qr: QRPaymentRequest):
+    try:
+        amount = float(qr.amount or 0)
+        # The trained fraud model uses amount/time/history. For a QR payment
+        # we only have the amount, so keep the other signals at neutral
+        # reference values rather than inventing transaction history.
+        row = {
+            "amount": amount if amount > 0 else REFERENCES["amount"],
+            "transaction_hour": datetime.now().hour,
+            "previous_transactions": REFERENCES["previous_transactions"],
+        }
+        p = probability(row)
+        score = int(round(p * 100))
+        risk = level(score)
+
+        network = qr.network.upper()
+        is_url = bool(re.match(r"^https?://", qr.paymentAddress or "", re.I))
+        extra_factors = factors(row)
+
+        if network == "DUITNOW":
+            extra_factors.insert(0, {
+                "title": "DuitNow Payment QR",
+                "severity": "low",
+                "description": f"Malaysia DuitNow payment QR detected for {qr.recipientName or 'merchant'} in {qr.currency or 'MYR'}.",
+                "scoreContribution": 0,
+            })
+        elif network == "EMV_PAYMENT_QR":
+            extra_factors.insert(0, {
+                "title": "EMV Payment QR",
+                "severity": "low",
+                "description": "An EMV merchant-presented payment QR was decoded successfully.",
+                "scoreContribution": 0,
+            })
+        elif is_url:
+            extra_factors.insert(0, {
+                "title": "Payment URL QR",
+                "severity": "medium",
+                "description": "The QR contains a payment webpage URL. Verify the destination before entering payment information.",
+                "scoreContribution": 5,
+            })
+
+        if qr.country and qr.country.upper() not in {"IN", "MY"}:
+            extra_factors.insert(0, {
+                "title": "International Payment QR",
+                "severity": "medium",
+                "description": f"The QR identifies country code {qr.country.upper()}. Confirm the merchant and currency before paying.",
+                "scoreContribution": 5,
+            })
+
+        return {
+            "riskResult": {
+                "riskScore": score,
+                "riskLevel": risk,
+                "confidence": int(round(max(p, 1 - p) * 100)),
+                "threatType": "Payment QR Risk Pattern" if score > 50 else "Payment QR",
+                "factors": extra_factors[:6],
+                "recommendation": recommendation(risk),
+                "analysisSummary": (
+                    f"PaySafe decoded a {qr.network} payment QR and evaluated the available "
+                    f"transaction signals. Merchant: {qr.recipientName or 'Not provided'}; "
+                    f"amount: {qr.currency or ''} {amount:g}."
+                ),
+                "inputType": "qr",
+                "inputPreview": f"{qr.network}: {qr.paymentAddress or qr.recipientName or 'payment QR'}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model": "RandomForestClassifier",
+                "fraudProbability": round(p, 6),
+            }
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Payment QR verification failed: {exc}") from exc
+
+
+
 # ── Payment link analyzer ──────────────────────────────────────
 class LinkRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
