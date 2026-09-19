@@ -113,6 +113,25 @@ function additionalFieldsSafeNote(raw: string | undefined): string {
 function parsePaymentPayload(raw: string): QRData {
   const value = raw.trim();
 
+  // Some merchant QR codes encode a payment web URL rather than the
+  // EMV/UPI payload directly. Keep the decoded URL instead of rejecting it.
+  if (/^https?:\\/\\//i.test(value)) {
+    let host = '';
+    try { host = new URL(value).hostname; } catch {}
+    return {
+      network: 'EMV_PAYMENT_QR',
+      paymentAddress: value,
+      upiId: '',
+      recipientName: '',
+      amount: 0,
+      currency: '—',
+      note: '',
+      merchantCity: '',
+      country: '',
+      reference: host || value,
+    };
+  }
+
   // Standard Indian UPI deep-link QR.
   let params: URLSearchParams | null = null;
   try {
@@ -161,6 +180,22 @@ function parsePaymentPayload(raw: string): QRData {
   throw new Error('QR code detected, but its payment format could not be recognized.');
 }
 
+async function decodeWithNativeDetector(source: ImageBitmapSource): Promise<string | null> {
+  try {
+    const Detector = (window as typeof window & {
+      BarcodeDetector?: new (options?: { formats?: string[] }) => {
+        detect(source: ImageBitmapSource): Promise<Array<{ rawValue?: string }>>;
+      };
+    }).BarcodeDetector;
+    if (!Detector) return null;
+    const detector = new Detector({ formats: ['qr_code'] });
+    const results = await detector.detect(source);
+    return results.find((item) => item.rawValue)?.rawValue || null;
+  } catch {
+    return null;
+  }
+}
+
 function decodeImageData(imageData: ImageData): string | null {
   const attempts: ImageData[] = [imageData];
   const gray = new Uint8ClampedArray(imageData.data);
@@ -184,6 +219,9 @@ function decodeImageData(imageData: ImageData): string | null {
 }
 
 async function decodeSource(source: ImageBitmapSource): Promise<string> {
+  const nativePayload = await decodeWithNativeDetector(source);
+  if (nativePayload) return nativePayload;
+
   const bitmap = await createImageBitmap(source);
   try {
     const scale = Math.max(1, Math.min(3, 1600 / Math.max(bitmap.width, bitmap.height)));
@@ -286,6 +324,38 @@ export function QrAnalyzerPage() {
       const video = videoRef.current;
 
       if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        // Prefer the browser's native QR decoder when available. Chrome/Edge
+        // can decode the complete QR payload directly from the camera frame.
+        let nativePayload: string | null = null;
+        const Detector = (window as typeof window & {
+          BarcodeDetector?: new (options?: { formats?: string[] }) => {
+            detect(source: ImageBitmapSource): Promise<Array<{ rawValue?: string }>>;
+          };
+        }).BarcodeDetector;
+        if (Detector) {
+          try {
+            const frame = await createImageBitmap(video);
+            const detector = new Detector({ formats: ['qr_code'] });
+            const detected = await detector.detect(frame);
+            nativePayload = detected.find((item) => item.rawValue)?.rawValue || null;
+            frame.close();
+          } catch {}
+        }
+
+        if (nativePayload) {
+          cancelled = true;
+          setRawPayload(nativePayload);
+          try {
+            setQrData(parsePaymentPayload(nativePayload));
+            stopCamera();
+            toast('Payment QR decoded successfully');
+          } catch (error) {
+            stopCamera();
+            toast(error instanceof Error ? error.message : 'Payment QR parsing failed', 'error');
+          }
+          return;
+        }
+
         const scale = Math.min(1, 1280 / video.videoWidth);
         canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
         canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
