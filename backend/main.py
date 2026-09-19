@@ -40,6 +40,18 @@ class TransactionRequest(BaseModel):
     isNewRecipient: bool = False
     previousFrequency: int = Field(default=0, ge=0, le=100000)
 
+class QRPaymentRequest(BaseModel):
+    network: str = Field(default="UPI", min_length=1, max_length=40)
+    paymentAddress: str = Field(default="", max_length=2048)
+    upiId: str = Field(default="", max_length=254)
+    recipientName: str = Field(default="", max_length=200)
+    amount: float = Field(default=0, ge=0)
+    currency: str = Field(default="INR", max_length=10)
+    note: str = Field(default="", max_length=500)
+    merchantCity: str = Field(default="", max_length=120)
+    country: str = Field(default="", max_length=10)
+    reference: str = Field(default="", max_length=200)
+
 def parse_hour(value: str) -> int:
     match = re.search(r"\d{1,2}", value)
     if not match: raise ValueError("Transaction time must contain an hour, e.g. 11:47 PM or 23:47.")
