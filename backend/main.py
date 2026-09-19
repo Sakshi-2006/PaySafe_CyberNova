@@ -134,12 +134,13 @@ def analyze_transaction(tx: TransactionRequest):
 # and the signed JWT is stored in an HttpOnly cookie; no auth token is stored
 # in localStorage/sessionStorage by the frontend.
 import jwt
+import psycopg
 from passlib.context import CryptContext
 from fastapi import Cookie, Response
 
 AUTH_SECRET = os.getenv("PAYSAFE_AUTH_SECRET", "CHANGE_ME_IN_PRODUCTION")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-USERS_FILE = BASE / "users.json"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 class AuthCredentials(BaseModel):
     email: str = Field(min_length=3, max_length=254)
@@ -151,252 +152,35 @@ class SignupRequest(AuthCredentials):
 class ProfileRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
-def _read_users():
-    if not USERS_FILE.exists():
-        return {}
-    try:
-        return json.loads(USERS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+def _db():
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="Authentication database is not configured.")
+    return psycopg.connect(DATABASE_URL, connect_timeout=8)
 
-def _write_users(users):
-    USERS_FILE.write_text(json.dumps(users, indent=2), encoding="utf-8")
+def _ensure_users_table():
+    with _db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE IF NOT EXISTS paysafe_users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+        conn.commit()
 
 def _public_user(user):
     return {"id": user["id"], "name": user["name"], "email": user["email"]}
 
 def _issue_auth_cookie(response: Response, user_id: str):
     token = jwt.encode({"sub": user_id}, AUTH_SECRET, algorithm="HS256")
-    response.set_cookie(
-        "paysafe_session", token, httponly=True, secure=True,
-        samesite="none", max_age=60 * 60 * 24 * 7, path="/"
-    )
+    response.set_cookie("paysafe_session", token, httponly=True, secure=True, samesite="none", max_age=60 * 60 * 24 * 7, path="/")
 
 def _current_user(session: str | None):
-    if not session:
-        return None
+    if not session: return None
     try:
         payload = jwt.decode(session, AUTH_SECRET, algorithms=["HS256"])
-        return _read_users().get(payload.get("sub"))
+        user_id = payload.get("sub")
+        if not user_id: return None
+        with _db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name, email FROM paysafe_users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+        return {"id": row[0], "name": row[1], "email": row[2]} if row else None
     except Exception:
         return None
 
-@app.post("/api/auth/signup")
-def auth_signup(req: SignupRequest, response: Response):
-    email = req.email.strip().lower()
-    users = _read_users()
-    if email in users:
-        raise HTTPException(status_code=409, detail="An account with this email already exists.")
-    user_id = __import__("uuid").uuid4().hex
-    users[user_id] = {
-        "id": user_id,
-        "name": req.name.strip(),
-        "email": email,
-        "passwordHash": pwd_context.hash(req.password),
-    }
-    _write_users(users)
-    _issue_auth_cookie(response, user_id)
-    return {"user": _public_user(users[user_id])}
-
-@app.post("/api/auth/login")
-def auth_login(req: AuthCredentials, response: Response):
-    email = req.email.strip().lower()
-    users = _read_users()
-    user = next((u for u in users.values() if u["email"] == email), None)
-    if not user or not pwd_context.verify(req.password, user["passwordHash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    _issue_auth_cookie(response, user["id"])
-    return {"user": _public_user(user)}
-
-@app.get("/api/auth/me")
-def auth_me(paysafe_session: str | None = Cookie(default=None)):
-    user = _current_user(paysafe_session)
-    return {"user": _public_user(user) if user else None}
-
-@app.post("/api/auth/logout")
-def auth_logout(response: Response):
-    response.delete_cookie("paysafe_session", path="/")
-    return {"ok": True}
-
-@app.patch("/api/auth/profile")
-def auth_profile(req: ProfileRequest, response: Response, paysafe_session: str | None = Cookie(default=None)):
-    user = _current_user(paysafe_session)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated.")
-    users = _read_users()
-    user["name"] = req.name.strip()
-    users[user["id"]] = user
-    _write_users(users)
-    return {"user": _public_user(user)}
-
-# ── Live link reputation + UPI verification services ─────────────
-# These endpoints deliberately do not fabricate reputation/UPI ownership.
-# Domain registration data is fetched from RDAP.org. Optional Google Safe
-# Browsing and external UPI verification can be enabled with server env vars.
-import socket
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
-
-def _http_json(url: str, headers: dict | None = None, timeout: int = 8):
-    req = Request(url, headers=headers or {"User-Agent": "PaySafe/1.0"})
-    with urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-def _domain_age_days(rdap: dict) -> int | None:
-    dates = []
-    for event in rdap.get("events", []):
-        if event.get("eventAction") in {"registration", "registered"} and event.get("eventDate"):
-            try:
-                dates.append(datetime.fromisoformat(event["eventDate"].replace("Z", "+00:00")))
-            except ValueError:
-                pass
-    if not dates:
-        return None
-    return max(0, (datetime.now(timezone.utc) - min(dates)).days)
-
-def _safe_browsing_check(url: str) -> dict:
-    key = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY")
-    if not key:
-        return {"status": "not_configured", "listed": None, "source": "Google Safe Browsing"}
-    endpoint = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={key}"
-    body = json.dumps({
-        "client": {"clientId": "paysafe", "clientVersion": "1.0"},
-        "threatInfo": {
-            "threatTypes": ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"],
-            "platformTypes": ["ANY_PLATFORM"],
-            "threatEntryTypes": ["URL"],
-            "threatEntries": [{"url": url}],
-        },
-    }).encode()
-    req = Request(endpoint, data=body, headers={"Content-Type": "application/json", "User-Agent": "PaySafe/1.0"})
-    with urlopen(req, timeout=8) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    matches = payload.get("matches", [])
-    return {"status": "checked", "listed": bool(matches), "matches": [m.get("threatType") for m in matches], "source": "Google Safe Browsing"}
-
-class LinkRequest(BaseModel):
-    url: str = Field(min_length=8, max_length=2048)
-
-@app.post("/api/analyze-link")
-def analyze_link(req: LinkRequest):
-    try:
-        parsed = urlparse(req.url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise HTTPException(status_code=400, detail="Enter a valid HTTP(S) URL.")
-        domain = parsed.hostname.lower().rstrip(".")
-        factors = []
-        if parsed.scheme != "https":
-            factors.append({"title": "No HTTPS", "severity": "high", "description": "The submitted URL does not use HTTPS.", "scoreContribution": 20})
-        try:
-            ip = socket.gethostbyname(domain)
-            dns_status = "resolved"
-        except OSError:
-            ip, dns_status = None, "unresolved"
-        if dns_status == "unresolved":
-            factors.append({"title": "Domain Does Not Resolve", "severity": "high", "description": "Live DNS resolution could not resolve the submitted domain.", "scoreContribution": 25})
-
-        registration_age_days = None
-        rdap_status = "unavailable"
-        try:
-            rdap = _http_json(f"https://rdap.org/domain/{domain}")
-            registration_age_days = _domain_age_days(rdap)
-            rdap_status = "checked"
-            if registration_age_days is not None and registration_age_days < 30:
-                factors.append({"title": "Very New Domain", "severity": "high", "description": f"RDAP registration data indicates the domain is about {registration_age_days} day(s) old.", "scoreContribution": 25})
-            elif registration_age_days is not None and registration_age_days < 180:
-                factors.append({"title": "Recently Registered Domain", "severity": "medium", "description": f"RDAP registration data indicates the domain is about {registration_age_days} day(s) old.", "scoreContribution": 12})
-        except Exception:
-            rdap = {}
-        reputation = {"status": "unavailable", "listed": None, "source": "Google Safe Browsing"}
-        try:
-            reputation = _safe_browsing_check(req.url.strip())
-            if reputation.get("listed"):
-                factors.append({"title": "Live Reputation Match", "severity": "critical", "description": "Google Safe Browsing returned a live threat-list match for this URL.", "scoreContribution": 55})
-        except Exception:
-            reputation = {"status": "error", "listed": None, "source": "Google Safe Browsing"}
-
-        score = min(100, sum(f["scoreContribution"] for f in factors))
-        if score <= 30: level = "SAFE"
-        elif score <= 50: level = "LOW"
-        elif score <= 70: level = "SUSPICIOUS"
-        elif score <= 85: level = "HIGH"
-        else: level = "CRITICAL"
-        if not factors:
-            factors.append({"title": "No Live Threat Signal", "severity": "low", "description": "No configured live reputation or registration signal indicated a known threat.", "scoreContribution": 5})
-            score = 5
-        return {
-            "riskResult": {
-                "riskScore": score, "riskLevel": level,
-                "confidence": 90 if reputation.get("status") == "checked" and rdap_status == "checked" else 70,
-                "threatType": "Known Malicious URL" if reputation.get("listed") else "Domain Reputation Assessment",
-                "factors": factors,
-                "recommendation": "Do not proceed if the live reputation check reports a threat. Otherwise verify the domain independently before entering payment details.",
-                "analysisSummary": f"Live analysis checked DNS ({dns_status}), RDAP registration data ({rdap_status}), and Safe Browsing status ({reputation.get('status')}).",
-                "liveSignals": {
-                    "domain": domain, "dns": dns_status, "resolvedIp": ip,
-                    "registrationAgeDays": registration_age_days, "blacklist": reputation
-                },
-            }
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Live link analysis failed: {exc}") from exc
-
-class UpiVerificationRequest(BaseModel):
-    upiId: str = Field(min_length=3, max_length=200)
-    recipientName: str = Field(default="", max_length=200)
-    amount: float = Field(default=0, ge=0)
-    note: str = Field(default="", max_length=500)
-
-@app.post("/api/verify-upi")
-def verify_upi(req: UpiVerificationRequest):
-    upi = req.upiId.strip().lower()
-    syntax_valid = bool(re.fullmatch(r"[a-z0-9._-]{2,256}@[a-z0-9._-]{2,64}", upi))
-    if not syntax_valid:
-        raise HTTPException(status_code=400, detail="Decoded QR contains an invalid UPI ID format.")
-
-    external_source = "local UPI syntax validation"
-    external = None
-    verifier_url = os.getenv("UPI_VERIFY_URL")
-    if verifier_url:
-        try:
-            body = json.dumps({"upiId": upi}).encode()
-            response = Request(verifier_url, data=body, headers={"Content-Type": "application/json", "User-Agent": "PaySafe/1.0"})
-            with urlopen(response, timeout=8) as r:
-                external = json.loads(r.read().decode("utf-8"))
-            external_source = "configured external UPI verifier"
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"UPI verification service failed: {exc}") from exc
-
-    factors = []
-    if not syntax_valid:
-        factors.append({"title": "Invalid UPI ID", "severity": "critical", "description": "The decoded UPI ID failed format validation.", "scoreContribution": 60})
-    if not req.recipientName.strip():
-        factors.append({"title": "Recipient Name Missing", "severity": "medium", "description": "The QR payload does not provide a recipient display name.", "scoreContribution": 15})
-    if req.amount >= 20000:
-        factors.append({"title": "High Payment Amount", "severity": "high", "description": f"The decoded QR requests ₹{req.amount:,.0f}.", "scoreContribution": 20})
-    if any(word in req.note.lower() for word in ("urgent", "verify", "kyc", "block", "suspend", "warning")):
-        factors.append({"title": "Urgent Payment Note", "severity": "high", "description": "The decoded payment note contains urgency or verification language.", "scoreContribution": 15})
-    if external and external.get("valid") is False:
-        factors.append({"title": "External UPI Verification Failed", "severity": "critical", "description": "The configured UPI verification service did not validate this VPA.", "scoreContribution": 60})
-
-    score = min(100, sum(f["scoreContribution"] for f in factors))
-    level = "SAFE" if score <= 30 else "LOW" if score <= 50 else "SUSPICIOUS" if score <= 70 else "HIGH" if score <= 85 else "CRITICAL"
-    verified = bool(external.get("valid")) if external else syntax_valid
-    return {
-        "verification": {
-            "upiId": upi, "syntaxValid": syntax_valid, "verified": verified,
-            "recipientName": external.get("recipientName", req.recipientName) if external else req.recipientName,
-            "source": external_source,
-            "externalResponse": external,
-        },
-        "riskResult": {
-            "riskScore": score, "riskLevel": level,
-            "confidence": 92 if external else 70,
-            "threatType": "UPI Verification Result",
-            "factors": factors or [{"title": "UPI Format Valid", "severity": "low", "description": "The decoded VPA matches the standard UPI identifier format.", "scoreContribution": 5}],
-            "recommendation": "Confirm the recipient name and amount in your banking app before approving payment.",
-            "analysisSummary": f"Decoded UPI payload was checked using {external_source}.",
-        },
-    }
