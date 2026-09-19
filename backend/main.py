@@ -1,7 +1,7 @@
 from pathlib import Path
 import os
 from datetime import datetime, timezone
-import json, re
+import json, re, socket
 import joblib
 import pandas as pd
 from fastapi import FastAPI, HTTPException
@@ -129,6 +129,144 @@ def analyze_transaction(tx: TransactionRequest):
         raise HTTPException(status_code=500, detail=f"Model analysis failed: {exc}") from exc
 
 
+# ── Payment link analyzer ──────────────────────────────────────
+class LinkRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+
+SUSPICIOUS_TLDS = {"xyz", "tk", "ru", "cn", "info", "biz", "cc", "gq", "ml", "cf"}
+FINANCIAL_TERMS = {"payment", "pay", "secure", "verify", "bank", "kyc", "transaction", "upi", "wallet", "login", "account"}
+KNOWN_BANKS = {
+    "sbi": {"sbi.co.in", "onlinesbi.sbi"},
+    "hdfc": {"hdfcbank.com"},
+    "icici": {"icicibank.com"},
+    "axis": {"axisbank.com"},
+    "pnb": {"pnbindia.in"},
+    "kotak": {"kotak.com"},
+    "rbi": {"rbi.org.in"},
+}
+
+def _link_level(score: int) -> str:
+    return "SAFE" if score <= 30 else "LOW" if score <= 50 else "SUSPICIOUS" if score <= 70 else "HIGH" if score <= 85 else "CRITICAL"
+
+def _link_severity(points: int) -> str:
+    return "critical" if points >= 24 else "high" if points >= 16 else "medium" if points >= 8 else "low"
+
+@app.post("/api/analyze-link")
+def analyze_link(request: LinkRequest):
+    raw = request.url.strip()
+    if not re.match(r"^https?://", raw, re.I):
+        raise HTTPException(status_code=400, detail="Enter a valid URL including https://")
+    parsed = urlparse(raw)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Could not determine the link domain.")
+
+    factors = []
+    score = 0
+
+    if parsed.scheme.lower() != "https":
+        points = 12
+        score += points
+        factors.append({"title":"No HTTPS Encryption","severity":"medium","description":"The link does not use HTTPS.","scoreContribution":points})
+
+    labels = hostname.split(".")
+    tld = labels[-1] if labels else ""
+    if tld in SUSPICIOUS_TLDS:
+        points = 14
+        score += points
+        factors.append({"title":"Suspicious TLD","severity":"high","description":f"The domain uses the .{tld} top-level domain, which can be associated with abusive registrations.","scoreContribution":points})
+
+    hyphens = hostname.count("-")
+    if hyphens >= 2:
+        points = 18
+        score += points
+        factors.append({"title":"Deceptive Domain Structure","severity":"high","description":"The domain contains multiple hyphens, which can be used in lookalike phishing domains.","scoreContribution":points})
+
+    if len(labels) >= 4:
+        points = 8
+        score += points
+        factors.append({"title":"Unusual Subdomain Structure","severity":"medium","description":"The link contains several domain/subdomain levels; verify the registered domain carefully.","scoreContribution":points})
+
+    path_lower = (parsed.path + "?" + parsed.query).lower()
+    hits = sorted({term for term in FINANCIAL_TERMS if term in path_lower or term in hostname})
+    if len(hits) >= 2:
+        points = 10
+        score += points
+        factors.append({"title":"Financial Keyword Clustering","severity":"medium","description":f"The URL contains multiple financial/security terms: {', '.join(hits[:5])}.","scoreContribution":points})
+
+    for bank, official_domains in KNOWN_BANKS.items():
+        if bank in hostname and hostname not in official_domains and not any(hostname.endswith("." + d) for d in official_domains):
+            points = 28
+            score += points
+            factors.append({"title":"Brand Impersonation","severity":"critical","description":f"The domain references {bank.upper()} but does not match its known official domain pattern.","scoreContribution":points})
+            break
+
+    # Live DNS signal: a domain that cannot resolve is not automatically fraudulent,
+    # but it is a useful warning for payment links.
+    dns_ok = True
+    try:
+        socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
+    except Exception:
+        dns_ok = False
+        points = 16
+        score += points
+        factors.append({"title":"Domain Does Not Resolve","severity":"high","description":"The hostname could not be resolved by DNS from the backend.","scoreContribution":points})
+
+    # RDAP gives registration data without visiting the payment page itself.
+    registration_age_days = None
+    rdap_source = None
+    try:
+        async def fetch_rdap():
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True, headers={"User-Agent":"PaySafe-Link-Analyzer/1.0"}) as client:
+                return await client.get(f"https://rdap.org/domain/{hostname}")
+        rdap_response = __import__("asyncio").run(fetch_rdap())
+        if rdap_response.status_code == 200:
+            data = rdap_response.json()
+            rdap_source = data.get("ldhName", hostname)
+            events = {e.get("eventAction"): e.get("eventDate") for e in data.get("events", [])}
+            created = events.get("registration") or events.get("registered")
+            if created:
+                created_dt = datetime.fromisoformat(created.replace("Z","+00:00"))
+                registration_age_days = max(0, (datetime.now(timezone.utc) - created_dt).days)
+                if registration_age_days < 30:
+                    points = 22
+                    score += points
+                    factors.append({"title":"Very New Domain","severity":"high","description":f"The domain appears to have been registered about {registration_age_days} day(s) ago.","scoreContribution":points})
+                elif registration_age_days < 90:
+                    points = 12
+                    score += points
+                    factors.append({"title":"Recently Registered Domain","severity":"medium","description":f"The domain appears to be about {registration_age_days} day(s) old.","scoreContribution":points})
+    except Exception:
+        pass
+
+    if not factors:
+        points = 6
+        score += points
+        factors.append({"title":"No Major Suspicious Indicators","severity":"low","description":"No strong structural or live registration indicators were detected.","scoreContribution":points})
+
+    score = min(100, score)
+    risk = _link_level(score)
+    confidence = min(98, 55 + len(factors) * 7 + (10 if registration_age_days is not None else 0))
+    recommendation = {
+        "SAFE":"The URL shows no major risk indicators. Still verify the domain before entering payment details.",
+        "LOW":"Some risk indicators are present. Verify the domain before proceeding.",
+        "SUSPICIOUS":"Do not enter payment information. Verify the URL through the official service.",
+        "HIGH":"Do not enter information or make a payment through this link. Use the official app or website instead.",
+        "CRITICAL":"Do not use this link. Do not enter financial information. Access the service through its official app or website."
+    }[risk]
+
+    factors.sort(key=lambda x:x["scoreContribution"], reverse=True)
+    return {"riskResult":{
+        "riskScore":score,"riskLevel":risk,"confidence":confidence,
+        "threatType":"Suspicious Payment URL" if risk not in {"SAFE","LOW"} else "Payment URL",
+        "factors":factors[:6],
+        "recommendation":recommendation,
+        "analysisSummary":f"Live link analysis evaluated URL structure, DNS resolution, and domain registration signals{f' for {rdap_source}' if rdap_source else ''}.",
+        "inputType":"url","inputPreview":raw[:200],"timestamp":datetime.now(timezone.utc).isoformat()
+    }}
+
+
+
 # ── PaySafe backend authentication ─────────────────────────────
 # FastAPI handles authentication; MongoDB Atlas provides persistent user storage.
 # Passwords are bcrypt-hashed and the JWT is stored in an HttpOnly cookie.
@@ -144,6 +282,8 @@ AUTH_SECRET = os.getenv("PAYSAFE_AUTH_SECRET", "CHANGE_ME_IN_PRODUCTION")
 MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DB = os.getenv("MONGODB_DB", "PaySafe")
 import bcrypt
+import httpx
+from urllib.parse import urlparse
 
 _mongo_client = None
 
