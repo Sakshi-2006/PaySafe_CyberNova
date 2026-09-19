@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from datetime import datetime, timezone
 import json, re
 import joblib
@@ -20,8 +21,16 @@ metrics = json.loads(METRICS_PATH.read_text(encoding="utf-8")) if METRICS_PATH.e
 REFERENCES = {"amount": 4836.5, "transaction_hour": 12.0, "previous_transactions": 7.0}
 
 app = FastAPI(title="PaySafe Fraud Detection API", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        os.getenv("CLIENT_URL", "http://localhost:5173"),
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class TransactionRequest(BaseModel):
     amount: float = Field(gt=0)
@@ -224,7 +233,6 @@ def auth_profile(req: ProfileRequest, response: Response, paysafe_session: str |
 # These endpoints deliberately do not fabricate reputation/UPI ownership.
 # Domain registration data is fetched from RDAP.org. Optional Google Safe
 # Browsing and external UPI verification can be enabled with server env vars.
-import os
 import socket
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
