@@ -169,7 +169,7 @@ export function LandingPage() {
               <ShieldCheck className="w-3.5 h-3.5 text-cyan-glow" />
               <span className="text-xs font-mono text-cyan-glow uppercase tracking-wider">After</span>
             </div>
-            <h3 className="text-2xl font-heading font-bold text-white mb-6">Financial Scam Guardian Flow.</h3>
+            <h3 className="text-2xl font-heading font-bold text-white mb-6">PaySafe Security Flow.</h3>
             <div className="space-y-3">
               {['Suspicious Input', 'AI Risk Analysis', 'Explainable Risk Score', 'Safer Decision'].map((step, i) => (
                 <div key={i}>
@@ -282,7 +282,7 @@ export function LandingPage() {
         <div className="flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
             <Shield className="w-5 h-5 text-cyan-glow" />
-            <span className="font-heading font-bold text-white text-sm">Financial Scam Guardian</span>
+            <span className="font-heading font-bold text-white text-sm">PaySafe</span>
           </div>
           <p className="text-xs text-gray-500 font-mono">
             Prototype for hackathon demo. Not connected to real banking systems.
