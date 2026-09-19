@@ -137,13 +137,12 @@ import uuid
 import jwt
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError
-from passlib.context import CryptContext
 from fastapi import Cookie, Response
 
 AUTH_SECRET = os.getenv("PAYSAFE_AUTH_SECRET", "CHANGE_ME_IN_PRODUCTION")
 MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DB = os.getenv("MONGODB_DB", "PaySafe")
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
 
 _mongo_client = None
 
@@ -215,7 +214,7 @@ def signup(request: SignupRequest, response: Response):
             "id": str(uuid.uuid4()),
             "name": name,
             "email": email,
-            "password_hash": pwd_context.hash(request.password),
+            "password_hash": bcrypt.hashpw(request.password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"),
             "created_at": datetime.now(timezone.utc),
         }
         _db()["users"].insert_one(user)
@@ -233,7 +232,7 @@ def login(request: AuthCredentials, response: Response):
         user = _db()["users"].find_one({"email": email})
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Authentication database error: {exc}") from exc
-    if not user or not pwd_context.verify(request.password, user["password_hash"]):
+    if not user or not bcrypt.checkpw(request.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     _issue_auth_cookie(response, user["id"])
     return {"user": _public_user(user)}
