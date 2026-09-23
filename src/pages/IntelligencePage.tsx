@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   BrainCog, Search, X, AlertTriangle, CheckCircle2, XCircle,
@@ -67,8 +68,9 @@ export function IntelligencePage() {
         {filtered.length === 0 && <div className="col-span-full p-12 text-center text-gray-500"><p>No guides match your search.</p></div>}
       </div>
 
-      {/* Detail Modal */}
-      <AnimatePresence>
+      {/* Detail Modal: render through a portal so fixed positioning is relative to the viewport */}
+      {createPortal(
+        <AnimatePresence>
         {selected && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -119,7 +121,9 @@ export function IntelligencePage() {
             </motion.div>
           </>
         )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }
