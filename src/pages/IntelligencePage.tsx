@@ -73,10 +73,19 @@ export function IntelligencePage() {
         <AnimatePresence>
         {selected && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setSelected(null)} className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50" />
-            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-2xl max-h-[85vh] overflow-y-auto glass-panel p-6 lg:p-8 z-50">
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setSelected(null)}
+              className="fixed inset-0 z-[9999] flex items-center justify-center p-4 lg:p-6 bg-black/70 backdrop-blur-sm"
+              style={{ width: '100vw', height: '100dvh' }}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-[min(90vw,672px)] max-h-[85dvh] overflow-y-auto glass-panel p-6 lg:p-8"
+              >
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <span className="text-xs font-mono uppercase tracking-wider text-gray-500">{selected.category}</span>
@@ -118,6 +127,7 @@ export function IntelligencePage() {
                   </ul>
                 </div>
               </div>
+              </motion.div>
             </motion.div>
           </>
         )}
