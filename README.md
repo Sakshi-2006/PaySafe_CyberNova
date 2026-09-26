@@ -427,5 +427,4 @@ A risk score does not guarantee that a transaction, QR code, or URL is safe or f
 The project uses open-source technologies and libraries from the React, Vite, Tailwind CSS, FastAPI, scikit-learn, MongoDB, and other developer communities.
 
 ---
-
 Built by Team CyberNova for Orvix Hackathon 2026.
